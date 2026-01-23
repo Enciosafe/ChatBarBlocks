@@ -22,6 +22,22 @@ local DEFAULTS = {
   w = 60,
   h = 6,
   gap = 4,
+
+  layout = {
+    mode = "HORIZONTAL",      -- HORIZONTAL / VERTICAL
+    direction = "TOP_DOWN",   -- TOP_DOWN / BOTTOM_UP (only for VERTICAL)
+  },
+
+  flash = {
+    stopOnHover = true,
+
+    basePeriod = 0.50, -- 1 message
+    midPeriod  = 0.30, -- 2-3 messages
+    fastPeriod = 0.18, -- 4+ messages
+    midAfter   = 2,
+    fastAfter  = 4,
+  },
+
 }
 
 local function CopyDefaults(src, dst)
@@ -85,12 +101,19 @@ local function ActivateChat(chatType, target)
   ChatFrame_OpenChat(prefix, frame)
 end
 
-local function Tooltip(owner, text)
+local function Tooltip(owner, text, r, g, b)
   if not DB().showTooltips then return end
   GameTooltip:SetOwner(owner, "ANCHOR_TOP")
-  GameTooltip:SetText(text, 1, 1, 1, true)
+
+  if r and g and b then
+    GameTooltip:SetText(text, r, g, b, true)
+  else
+    GameTooltip:SetText(text, 1, 1, 1, true)
+  end
+
   GameTooltip:Show()
 end
+
 
 local function ChatTypeColor(chatType)
   local info = ChatTypeInfo and ChatTypeInfo[chatType]
@@ -122,7 +145,7 @@ local UI = {
 
 -- Forward declarations (IMPORTANT)
 local RestorePos, Build, UpdateLockVisual
-local StopFlash, StartFlash, FlashChatType
+local StopFlash, StartFlash, FlashChatType, GetFlashPeriod
 local ApplyAndRebuild, CreateOptionsPanel
 
 -- =========================
@@ -153,20 +176,44 @@ end
 -- =========================
 -- Flashing logic (GLOBAL for this file)
 -- =========================
-StopFlash = function(btn)
+local function StopFlash(btn)
   if not btn then return end
   UI.flashing[btn] = nil
   btn._flash = nil
+  btn._unread = 0
   btn:SetScript("OnUpdate", nil)
+
+  if btn.glow then
+    btn.glow:SetVertexColor(1, 1, 1, 0)
+  end
+
   if btn._baseColor then
     btn.tex:SetVertexColor(btn._baseColor[1], btn._baseColor[2], btn._baseColor[3], btn._baseColor[4])
   end
 end
 
-StartFlash = function(btn)
-  if not btn or UI.flashing[btn] then return end
+GetFlashPeriod = function(btn)
+  local db = DB()
+  local f = db.flash or {}
+  local unread = btn._unread or 0
+
+  if unread >= (f.fastAfter or 4) then return (f.fastPeriod or 0.18) end
+  if unread >= (f.midAfter  or 2) then return (f.midPeriod  or 0.30) end
+  return (f.basePeriod or 0.50)
+end
+
+
+local function StartFlash(btn)
+  if not btn then return end
+
+  btn._unread = (btn._unread or 0) + 1
+
+  if UI.flashing[btn] then
+    return
+  end
+
   UI.flashing[btn] = true
-  btn._flash = { t = 0, on = false }
+  btn._flash = { t = 0 }
 
   btn:SetScript("OnUpdate", function(self, elapsed)
     if not UI.flashing[self] then
@@ -174,30 +221,43 @@ StartFlash = function(btn)
       return
     end
 
+    local period = GetFlashPeriod(self) 
     local f = self._flash
-    if not f then return end
+    f.t = (f.t + elapsed) % period
 
-    f.t = f.t + elapsed
-    if f.t >= 0.35 then
-      f.t = 0
-      f.on = not f.on
+    -- 0..1..0 smooth pulse
+    local x = f.t / period
+    local pulse = math.sin(x * math.pi) -- nice smooth pulse
 
-      if self._baseColor then
-        local r,g,b,a = self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4]
-        if f.on then
-          self.tex:SetVertexColor(math.min(r*1.25,1), math.min(g*1.25,1), math.min(b*1.25,1), math.min(a+0.25,1))
-        else
-          self.tex:SetVertexColor(r,g,b,a)
-        end
-      end
+    -- Glow intensity: base + extra from unread
+    local unread = self._unread or 1
+    local boost = math.min(0.35 + unread * 0.06, 0.85) -- caps
+    local glowA = pulse * boost
+
+    if self.glow then
+      local r,g,b = 1,1,1
+      if self._baseColor then r,g,b = self._baseColor[1], self._baseColor[2], self._baseColor[3] end
+      self.glow:SetVertexColor(r, g, b, glowA)
+
+    end
+
+    -- Also slightly brighten main color (small but noticeable)
+    if self._baseColor then
+      local r,g,b,a = self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4]
+      local k = 1 + pulse * 0.25
+      self.tex:SetVertexColor(math.min(r*k,1), math.min(g*k,1), math.min(b*k,1), a)
     end
   end)
 end
 
-FlashChatType = function(chatType)
+
+local function FlashChatType(chatType)
   local btn = UI.typeButtons and UI.typeButtons[chatType]
-  if btn then StartFlash(btn) end
+  if btn then
+    StartFlash(btn)
+  end
 end
+
 
 -- =========================
 -- Blocks / Layout / Build
@@ -222,36 +282,133 @@ local function MakeBlock(parent, w, h)
   b.tex:SetAllPoints(true)
   b.tex:SetTexture("Interface\\Buttons\\WHITE8x8")
 
+  -- Glow overlay (flashing)
+  b.glow = b:CreateTexture(nil, "OVERLAY")
+  b.glow:SetAllPoints(true)
+  b.glow:SetTexture("Interface\\Buttons\\WHITE8x8")
+  b.glow:SetBlendMode("ADD")
+  b.glow:SetVertexColor(1, 1, 1, 0)
+
+  -- 1px border made from 4 textures (no media files)
+  local function MakeEdge()
+    local t = b:CreateTexture(nil, "OVERLAY")
+    t:SetTexture("Interface\\Buttons\\WHITE8x8")
+    t:SetVertexColor(0, 0, 0, 0.55) -- default subtle border
+    return t
+  end
+
+  b.border = {
+    top = MakeEdge(),
+    bottom = MakeEdge(),
+    left = MakeEdge(),
+    right = MakeEdge(),
+  }
+
+  local bw = 1
+  b.border.top:SetPoint("TOPLEFT", 0, 0)
+  b.border.top:SetPoint("TOPRIGHT", 0, 0)
+  b.border.top:SetHeight(bw)
+
+  b.border.bottom:SetPoint("BOTTOMLEFT", 0, 0)
+  b.border.bottom:SetPoint("BOTTOMRIGHT", 0, 0)
+  b.border.bottom:SetHeight(bw)
+
+  b.border.left:SetPoint("TOPLEFT", 0, 0)
+  b.border.left:SetPoint("BOTTOMLEFT", 0, 0)
+  b.border.left:SetWidth(bw)
+
+  b.border.right:SetPoint("TOPRIGHT", 0, 0)
+  b.border.right:SetPoint("BOTTOMRIGHT", 0, 0)
+  b.border.right:SetWidth(bw)
+
+  local function SetBorderColor(r, g, bl, a)
+    if not b.border then return end
+    b.border.top:SetVertexColor(r, g, bl, a)
+    b.border.bottom:SetVertexColor(r, g, bl, a)
+    b.border.left:SetVertexColor(r, g, bl, a)
+    b.border.right:SetVertexColor(r, g, bl, a)
+  end
+
   b:SetScript("OnEnter", function(self)
-    if self._tooltipText then Tooltip(self, self._tooltipText) end
+    -- Tooltip colored to channel
+    if self._tooltipText then
+      local r, g, bl = 1, 1, 1
+      if self._baseColor then r, g, bl = self._baseColor[1], self._baseColor[2], self._baseColor[3] end
+      Tooltip(self, self._tooltipText, r, g, bl)
+    end
+
+    local db = DB()
+    if db.flash and db.flash.stopOnHover and UI.flashing[self] then
+      StopFlash(self)
+      return
+    end
+
+    -- Border highlight with channel color
+    if self._baseColor then
+      local r, g, bl = self._baseColor[1], self._baseColor[2], self._baseColor[3]
+      SetBorderColor(r, g, bl, 0.95)
+    end
+
+    -- Small brighten fill (keep your old feel)
     local r, g, bl, a = self.tex:GetVertexColor()
     self.tex:SetVertexColor(r, g, bl, math.min(a + 0.15, 1))
   end)
 
   b:SetScript("OnLeave", function(self)
     GameTooltip:Hide()
+
+    -- Restore fill
     if self._baseColor then
       self.tex:SetVertexColor(self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4])
     end
+
+    -- Restore border subtle
+    SetBorderColor(0, 0, 0, 0.55)
   end)
 
   return b
 end
 
+
 local function Layout()
   local db = DB()
   local pad = 4
-  local x = pad
 
-  for _, b in ipairs(UI.buttons) do
-    b:ClearAllPoints()
-    b:SetPoint("TOPLEFT", UI.bar, "TOPLEFT", x, -pad)
-    x = x + db.w + db.gap
+  local mode = (db.layout and db.layout.mode) or "HORIZONTAL"
+  local dir  = (db.layout and db.layout.direction) or "TOP_DOWN"
+
+  if mode == "VERTICAL" then
+    local y = -pad
+    local x = pad
+
+    for _, b in ipairs(UI.buttons) do
+      b:ClearAllPoints()
+      b:SetPoint("TOPLEFT", UI.bar, "TOPLEFT", x, y)
+
+      if dir == "BOTTOM_UP" then
+        y = y + (db.h + db.gap)
+      else
+        y = y - (db.h + db.gap)
+      end
+    end
+
+    UI.bar:SetWidth(db.w + pad * 2)
+    UI.bar:SetHeight((#UI.buttons * (db.h + db.gap)) - db.gap + pad * 2)
+
+  else
+    local x = pad
+
+    for _, b in ipairs(UI.buttons) do
+      b:ClearAllPoints()
+      b:SetPoint("TOPLEFT", UI.bar, "TOPLEFT", x, -pad)
+      x = x + db.w + db.gap
+    end
+
+    UI.bar:SetWidth(x + pad - db.gap)
+    UI.bar:SetHeight(db.h + pad * 2)
   end
-
-  UI.bar:SetWidth(x + pad - db.gap)
-  UI.bar:SetHeight(db.h + pad * 2)
 end
+
 
 Build = function()
   local db = DB()
@@ -267,6 +424,8 @@ Build = function()
       b.tex:SetVertexColor(r, g, bl, 0.95)
       b._baseColor = { r, g, bl, 0.95 }
       b._tooltipText = upper
+      b._chatType = upper
+
 
       UI.typeButtons[upper] = b
 
@@ -400,31 +559,61 @@ CreateOptionsPanel = function()
     function(v) DB().showTooltips = v end
   )
 
-  local sW = MakeSlider("Block width", 16, -140, 10, 200, 1,
+  local chkHoverStop = MakeCheck("Stop flashing on hover", 16, -120,
+  function() return (DB().flash and DB().flash.stopOnHover) end,
+  function(v)
+    DB().flash = DB().flash or {}
+    DB().flash.stopOnHover = v
+  end
+)
+
+local btnH = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+btnH:SetSize(110, 22)
+btnH:SetPoint("TOPLEFT", 16, -150)
+btnH:SetText("Horizontal")
+btnH:SetScript("OnClick", function()
+  DB().layout = DB().layout or {}
+  DB().layout.mode = "HORIZONTAL"
+  ApplyAndRebuild()
+end)
+
+local btnV = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+btnV:SetSize(110, 22)
+btnV:SetPoint("LEFT", btnH, "RIGHT", 8, 0)
+btnV:SetText("Vertical")
+btnV:SetScript("OnClick", function()
+  DB().layout = DB().layout or {}
+  DB().layout.mode = "VERTICAL"
+  ApplyAndRebuild()
+end)
+
+
+
+  local sW = MakeSlider("Block width", 16, -200, 10, 200, 1,
     function() return DB().w end,
     function(v) DB().w = math.floor(v + 0.5) end,
     "%.0f"
   )
 
-  local sH = MakeSlider("Block height", 16, -190, 2, 40, 1,
+  local sH = MakeSlider("Block height", 16, -250, 2, 40, 1,
     function() return DB().h end,
     function(v) DB().h = math.floor(v + 0.5) end,
     "%.0f"
   )
 
-  local sGap = MakeSlider("Gap", 16, -240, 0, 30, 1,
+  local sGap = MakeSlider("Gap", 16, -300, 0, 30, 1,
     function() return DB().gap end,
     function(v) DB().gap = math.floor(v + 0.5) end,
     "%.0f"
   )
 
-  local sAlpha = MakeSlider("Bar alpha", 16, -290, 0.1, 1.0, 0.05,
+  local sAlpha = MakeSlider("Bar alpha", 16, -350, 0.1, 1.0, 0.05,
     function() return DB().alpha end,
     function(v) DB().alpha = v end,
     "%.2f"
   )
 
-  local sScale = MakeSlider("Bar scale", 16, -340, 0.6, 2.0, 0.05,
+  local sScale = MakeSlider("Bar scale", 16, -400, 0.6, 2.0, 0.05,
     function() return DB().scale end,
     function(v) DB().scale = v end,
     "%.2f"
@@ -432,7 +621,7 @@ CreateOptionsPanel = function()
 
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(140, 22)
-  reset:SetPoint("TOPLEFT", 16, -390)
+  reset:SetPoint("TOPLEFT", 16, -455)
   reset:SetText("Reset to defaults")
   reset:SetScript("OnClick", function()
     ChatBarBlocksDB = nil
@@ -447,6 +636,8 @@ CreateOptionsPanel = function()
   panel.Refresh = function()
     chkLocked.Refresh()
     chkTooltips.Refresh()
+    chkHoverStop.Refresh()
+
     sW.Refresh()
     sH.Refresh()
     sGap.Refresh()
@@ -546,6 +737,9 @@ f:RegisterEvent("CHAT_MSG_RAID")
 f:RegisterEvent("CHAT_MSG_RAID_LEADER")
 f:RegisterEvent("CHAT_MSG_GUILD")
 f:RegisterEvent("CHAT_MSG_WHISPER")
+f:RegisterEvent("CHAT_MSG_OFFICER")
+f:RegisterEvent("CHAT_MSG_GUILD_ACHIEVEMENT")
+
 
 f:SetScript("OnEvent", function(self, event, arg1)
   if event == "ADDON_LOADED" and arg1 == "ChatBarBlocks" then
@@ -563,20 +757,25 @@ f:SetScript("OnEvent", function(self, event, arg1)
     return
   end
 
-  -- Blink (only local channels)
+  
+    -- Blink (only local channels)
   if event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" then
     FlashChatType("PARTY")
     return
   elseif event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER" then
     FlashChatType("RAID")
     return
-  elseif event == "CHAT_MSG_GUILD" then
+  elseif event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_GUILD_ACHIEVEMENT" then
     FlashChatType("GUILD")
+    return
+  elseif event == "CHAT_MSG_OFFICER" then
+    FlashChatType("OFFICER")
     return
   elseif event == "CHAT_MSG_WHISPER" then
     FlashChatType("WHISPER")
     return
   end
+
 
   -- Rebuild when channel state changes
   if event == "PLAYER_ENTERING_WORLD"
