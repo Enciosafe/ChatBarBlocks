@@ -145,7 +145,6 @@ local UI = {
 
 -- Forward declarations (IMPORTANT)
 local RestorePos, Build, UpdateLockVisual
-local StopFlash, StartFlash, FlashChatType, GetFlashPeriod
 local ApplyAndRebuild, CreateOptionsPanel
 
 -- =========================
@@ -181,7 +180,6 @@ local function StopFlash(btn)
   UI.flashing[btn] = nil
   btn._flash = nil
   btn._unread = 0
-  btn:SetScript("OnUpdate", nil)
 
   if btn.glow then
     btn.glow:SetVertexColor(1, 1, 1, 0)
@@ -190,7 +188,11 @@ local function StopFlash(btn)
   if btn._baseColor then
     btn.tex:SetVertexColor(btn._baseColor[1], btn._baseColor[2], btn._baseColor[3], btn._baseColor[4])
   end
+
+  -- IMPORTANT: do NOT clear OnUpdate here (border animation may be running)
+  -- If nothing needs updates, the unified updater will disable itself.
 end
+
 
 GetFlashPeriod = function(btn)
   local db = DB()
@@ -215,40 +217,76 @@ local function StartFlash(btn)
   UI.flashing[btn] = true
   btn._flash = { t = 0 }
 
-  btn:SetScript("OnUpdate", function(self, elapsed)
-    if not UI.flashing[self] then
-      self:SetScript("OnUpdate", nil)
-      return
-    end
+  -- Ensure unified OnUpdate is running
+  if not btn._hasUnifiedUpdate then
+    btn._hasUnifiedUpdate = true
 
-    local period = GetFlashPeriod(self) 
-    local f = self._flash
-    f.t = (f.t + elapsed) % period
+    btn:SetScript("OnUpdate", function(self, elapsed)
+      local needUpdate = false
 
-    -- 0..1..0 smooth pulse
-    local x = f.t / period
-    local pulse = math.sin(x * math.pi) -- nice smooth pulse
+      -- ===== Flash update =====
+      if UI.flashing[self] and self._flash then
+        needUpdate = true
 
-    -- Glow intensity: base + extra from unread
-    local unread = self._unread or 1
-    local boost = math.min(0.35 + unread * 0.06, 0.85) -- caps
-    local glowA = pulse * boost
+        local period = GetFlashPeriod(self)
+        local f = self._flash
+        f.t = (f.t + elapsed) % period
 
-    if self.glow then
-      local r,g,b = 1,1,1
-      if self._baseColor then r,g,b = self._baseColor[1], self._baseColor[2], self._baseColor[3] end
-      self.glow:SetVertexColor(r, g, b, glowA)
+        local x = f.t / period
+        local pulse = math.sin(x * math.pi)
 
-    end
+        local unread = self._unread or 1
+        local boost = math.min(0.35 + unread * 0.06, 0.85)
+        local glowA = pulse * boost
 
-    -- Also slightly brighten main color (small but noticeable)
-    if self._baseColor then
-      local r,g,b,a = self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4]
-      local k = 1 + pulse * 0.25
-      self.tex:SetVertexColor(math.min(r*k,1), math.min(g*k,1), math.min(b*k,1), a)
-    end
-  end)
+        if self.glow then
+          local r, g, b = 1, 1, 1
+          if self._baseColor then r, g, b = self._baseColor[1], self._baseColor[2], self._baseColor[3] end
+          self.glow:SetVertexColor(r, g, b, glowA)
+        end
+
+        if self._baseColor then
+          local r, g, b, a = self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4]
+          local k = 1 + pulse * 0.25
+          self.tex:SetVertexColor(math.min(r * k, 1), math.min(g * k, 1), math.min(b * k, 1), a)
+        end
+      end
+
+      -- ===== Border animation update =====
+      if self._borderAnim and self._borderAnim.active then
+        needUpdate = true
+
+        local anim = self._borderAnim
+        anim.t = anim.t + elapsed
+        local p = anim.t / anim.dur
+        if p >= 1 then p = 1 end
+
+        -- smoothstep
+        local k = p * p * (3 - 2 * p)
+
+        local r = anim.from[1] + (anim.to[1] - anim.from[1]) * k
+        local g = anim.from[2] + (anim.to[2] - anim.from[2]) * k
+        local b = anim.from[3] + (anim.to[3] - anim.from[3]) * k
+        local a = anim.from[4] + (anim.to[4] - anim.from[4]) * k
+
+        if self._setBorderColor then
+          self._setBorderColor(r, g, b, a)
+        end
+
+        if p >= 1 then
+          anim.active = false
+        end
+      end
+
+      -- If nothing is running, stop OnUpdate to save perf
+      if not needUpdate then
+        self:SetScript("OnUpdate", nil)
+        self._hasUnifiedUpdate = false
+      end
+    end)
+  end
 end
+
 
 
 local function FlashChatType(chatType)
@@ -328,6 +366,94 @@ local function MakeBlock(parent, w, h)
     b.border.left:SetVertexColor(r, g, bl, a)
     b.border.right:SetVertexColor(r, g, bl, a)
   end
+  b._setBorderColor = SetBorderColor
+
+  -- Border animation state
+  b._borderAnim = {
+    t = 0,
+    dur = 0.15,
+    from = {0, 0, 0, 0.55},
+    to   = {0, 0, 0, 0.55},
+    active = false,
+  }
+
+  local function AnimateBorder(toR, toG, toB, toA)
+    local anim = b._borderAnim
+    anim.t = 0
+    anim.active = true
+
+    local r, g, bl, a = b.border.top:GetVertexColor()
+    anim.from[1], anim.from[2], anim.from[3], anim.from[4] = r, g, bl, a
+    anim.to[1], anim.to[2], anim.to[3], anim.to[4] = toR, toG, toB, toA
+
+    -- Ensure unified update is running (might be needed even without flash)
+    if not b._hasUnifiedUpdate then
+      b._hasUnifiedUpdate = true
+      b:SetScript("OnUpdate", function(self, elapsed)
+        local needUpdate = false
+
+        -- Flash update
+        if UI.flashing[self] and self._flash then
+          needUpdate = true
+
+          local period = GetFlashPeriod(self)
+          local f = self._flash
+          f.t = (f.t + elapsed) % period
+
+          local x = f.t / period
+          local pulse = math.sin(x * math.pi)
+
+          local unread = self._unread or 1
+          local boost = math.min(0.35 + unread * 0.06, 0.85)
+          local glowA = pulse * boost
+
+          if self.glow then
+            local r, g, b = 1, 1, 1
+            if self._baseColor then r, g, b = self._baseColor[1], self._baseColor[2], self._baseColor[3] end
+            self.glow:SetVertexColor(r, g, b, glowA)
+          end
+
+          if self._baseColor then
+            local r, g, b, a = self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4]
+            local k = 1 + pulse * 0.25
+            self.tex:SetVertexColor(math.min(r * k, 1), math.min(g * k, 1), math.min(b * k, 1), a)
+          end
+        end
+
+        -- Border animation update
+        if self._borderAnim and self._borderAnim.active then
+          needUpdate = true
+
+          local anim = self._borderAnim
+          anim.t = anim.t + elapsed
+          local p = anim.t / anim.dur
+          if p >= 1 then p = 1 end
+          local k = p * p * (3 - 2 * p)
+
+          local r = anim.from[1] + (anim.to[1] - anim.from[1]) * k
+          local g = anim.from[2] + (anim.to[2] - anim.from[2]) * k
+          local b2 = anim.from[3] + (anim.to[3] - anim.from[3]) * k
+          local a2 = anim.from[4] + (anim.to[4] - anim.from[4]) * k
+
+          if self._setBorderColor then
+            self._setBorderColor(r, g, b2, a2)
+          end
+
+          if p >= 1 then
+            anim.active = false
+          end
+        end
+
+        if not needUpdate then
+          self:SetScript("OnUpdate", nil)
+          self._hasUnifiedUpdate = false
+        end
+      end)
+    end
+  end
+
+  -- initial border
+  SetBorderColor(0, 0, 0, 0.55)
 
   b:SetScript("OnEnter", function(self)
     -- Tooltip colored to channel
@@ -343,13 +469,12 @@ local function MakeBlock(parent, w, h)
       return
     end
 
-    -- Border highlight with channel color
+    -- Fade border to channel color
     if self._baseColor then
-      local r, g, bl = self._baseColor[1], self._baseColor[2], self._baseColor[3]
-      SetBorderColor(r, g, bl, 0.95)
+      AnimateBorder(self._baseColor[1], self._baseColor[2], self._baseColor[3], 0.95)
     end
 
-    -- Small brighten fill (keep your old feel)
+    -- Keep small brighten effect
     local r, g, bl, a = self.tex:GetVertexColor()
     self.tex:SetVertexColor(r, g, bl, math.min(a + 0.15, 1))
   end)
@@ -362,8 +487,8 @@ local function MakeBlock(parent, w, h)
       self.tex:SetVertexColor(self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4])
     end
 
-    -- Restore border subtle
-    SetBorderColor(0, 0, 0, 0.55)
+    -- Fade border back to subtle
+    AnimateBorder(0, 0, 0, 0.55)
   end)
 
   return b
