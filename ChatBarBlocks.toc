@@ -2,7 +2,7 @@
 ## Title: ChatBarBlocks
 ## Notes: Simple colored chat channel bars
 ## Author: Ogiz
-## Version: 1.0
+## Version: 1.1.0
 ## IconTexture: Interface\AddOns\ChatBarBlocks\icon
 ## SavedVariables: ChatBarBlocksDB
 
