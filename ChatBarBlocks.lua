@@ -1,5 +1,5 @@
 
---ver 1.1.0
+--ver 1.1.1
 
 -- Created by Ogiz aka Enciosafe
 -- ChatBarBlocks (TBC Classic 2.5.5)
@@ -205,7 +205,7 @@ local function Libs_Init()
     end,
 
     OnTooltipShow = function(tooltip)
-      tooltip:AddLine("ChatBarBlocks |cffaaaaaaver 1.1.0|r")
+      tooltip:AddLine("ChatBarBlocks |cffaaaaaaver 1.1.1|r")
       tooltip:AddLine(" ")
       tooltip:AddLine("|cffffffffLeft click:|r Options")
       tooltip:AddLine("|cffffffffRight click:|r Lock/Unlock bar")
