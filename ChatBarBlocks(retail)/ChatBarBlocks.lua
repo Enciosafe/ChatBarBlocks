@@ -1,12 +1,11 @@
 
---ver 1.2.0
+--ver 1.1.1
 
 -- Created by Ogiz aka Enciosafe
--- ChatBarBlocks (TBC Classic 2.5.5)
+-- ChatBarBlocks (Retail)
 -- Colored blocks: click to open chat in selected channel.
 -- Blink PARTY/RAID/GUILD/WHISPER when new messages arrive (not for global channels).
 -- Optional ROLL button (/roll 100).
--- Optional READY CHECK button
 -- Minimap icon via LibDataBroker + LibDBIcon (standard minimap button look like other addons).
 
 local ADDON_NAME = ...
@@ -49,11 +48,6 @@ local DEFAULTS = {
     enabled = true,
   },
 
-  readycheck = {
-  enabled = true,
-},
-
-
   -- (LibDBIcon)
   minimapIcon = {
     hide = false,
@@ -94,16 +88,21 @@ local function Print(msg)
   if cf then cf:AddMessage("|cff66ccffChatBarBlocks:|r " .. msg) end
 end
 
-local function Tooltip(owner, text, r, g, b)
-  if not DB().showTooltips then return end
-  GameTooltip:SetOwner(owner, "ANCHOR_TOP")
-  if r and g and b then
-    GameTooltip:SetText(text, r, g, b, true)
-  else
-    GameTooltip:SetText(text, 1, 1, 1, true)
-  end
-  GameTooltip:Show()
+--local function Tooltip(owner, text, r, g, b)
+-- if not DB().showTooltips then return end
+--  GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+--  if r and g and b then
+--    GameTooltip:SetText(text, r, g, b, true)
+--  else
+--    GameTooltip:SetText(text, 1, 1, 1, true)
+--  end
+--  GameTooltip:Show()
+-- end
+
+local function Tooltip()
+  return
 end
+
 
 local function ChatTypeColor(chatType)
   local info = ChatTypeInfo and ChatTypeInfo[chatType]
@@ -121,18 +120,6 @@ end
 local function IsChatType(s)
   return ChatTypeInfo and ChatTypeInfo[s] ~= nil
 end
-
-local function CBB_IsLeaderOrAssist()
-  
-  if UnitIsGroupLeader and UnitIsGroupLeader("player") then
-    return true
-  end
-  if UnitIsGroupAssistant and UnitIsGroupAssistant("player") then
-    return true
-  end
-  return false
-end
-
 
 local function ActivateChat(chatType, target)
   local frame = DEFAULT_CHAT_FRAME or ChatFrame1
@@ -223,7 +210,7 @@ local function Libs_Init()
     end,
 
     OnTooltipShow = function(tooltip)
-      tooltip:AddLine("ChatBarBlocks |cffaaaaaaver 1.2.0|r")
+      tooltip:AddLine("ChatBarBlocks |cffaaaaaaver 1.1.1|r")
       tooltip:AddLine(" ")
       tooltip:AddLine("|cffffffffLeft click:|r Options")
       tooltip:AddLine("|cffffffffRight click:|r Lock/Unlock bar")
@@ -352,7 +339,7 @@ local function CreateConfigFrame()
   author:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -6)
   author:SetWidth(340)
   author:SetJustifyH("LEFT")
-  author:SetText("VER. 1.2.0    Created by Ogiz from Ukraine")
+  author:SetText("VER. 1.1.0    Created by Ogiz from Ukraine")
 
 
   local function MakeCheck(label, x, y, get, set)
@@ -426,11 +413,11 @@ local function CreateConfigFrame()
     function(v) DB().locked = v end
   )
 
-  y = y - 26
-  local chkTooltips = MakeCheck("Show tooltips on hover", 16, y,
-    function() return DB().showTooltips end,
-    function(v) DB().showTooltips = v end
-  )
+  --  y = y - 26
+  --  local chkTooltips = MakeCheck("Show tooltips on hover", 16, y,
+  --    function() return DB().showTooltips end,
+  --    function(v) DB().showTooltips = v end
+  --  )
 
   y = y - 26
   local chkHoverStop = MakeCheck("Stop flashing on hover", 16, y,
@@ -449,16 +436,6 @@ local function CreateConfigFrame()
       DB().roll.enabled = v
     end
   )
-
-  y = y - 26
-local chkRC = MakeCheck("Show READY CHECK button", 16, y,
-  function() return (DB().readycheck and DB().readycheck.enabled) end,
-  function(v)
-    DB().readycheck = DB().readycheck or {}
-    DB().readycheck.enabled = v
-  end
-)
-
 
   y = y - 26
   local chkMini = MakeCheck("Show minimap options button", 16, y,
@@ -566,13 +543,11 @@ local chkRC = MakeCheck("Show READY CHECK button", 16, y,
 
   f.Refresh = function()
     chkLocked.Refresh()
-    chkTooltips.Refresh()
+    --chkTooltips.Refresh()
     chkHoverStop.Refresh()
     chkRoll.Refresh()
     chkMini.Refresh()
     sRadius.Refresh()
-    chkRC.Refresh()
-
 
     sW.Refresh()
     sH.Refresh()
@@ -616,33 +591,6 @@ local function DoRoll100()
   eb:SetCursorPosition(#"/roll 100")
   ChatEdit_SendText(eb, 0)
 end
-
-local function CanReadyCheck()
-  if not (IsInGroup and IsInGroup()) then return false end
-
-  
-  if IsInRaid and IsInRaid() then
-    return (UnitIsGroupLeader and UnitIsGroupLeader("player"))
-        or (UnitIsGroupAssistant and UnitIsGroupAssistant("player"))
-  end
-
- 
-  return CBB_IsLeaderOrAssist()
-end
-
-
-local function DoReadyCheckNow()
-  
-  if DoReadyCheck then
-    DoReadyCheck()
-    return
-  end
-  
-  if RunMacroText then
-    RunMacroText("/readycheck")
-  end
-end
-
 
 -- =========================
 -- Position / Lock visuals
@@ -789,47 +737,6 @@ local function ClearButtons()
   wipe(UI.buttons)
   wipe(UI.typeButtons)
 end
-
-local function SwitchChatPreserveText(chatType, target)
-  local eb = (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox) or ChatFrame1EditBox or ChatFrameEditBox
-  if not eb then
-    ActivateChat(chatType, target)
-    return
-  end
-
-  -- if it's not open before
-  if not eb:IsShown() then
-    ActivateChat(chatType, target)
-    return
-  end
-
-  -- save data
-  local text = eb:GetText() or ""
-  local cursor = eb:GetCursorPosition() or #text
-
-  -- switch chat with dada
-  if chatType == "CHANNEL" then
-    local n = tonumber(target)
-    if not n or n <= 0 then return end
-    eb:SetAttribute("chatType", "CHANNEL")
-    eb:SetAttribute("channelTarget", n)
-  elseif chatType == "WHISPER" then
-    eb:SetAttribute("chatType", "WHISPER")
-    eb:SetAttribute("tellTarget", target or "")
-  else
-    eb:SetAttribute("chatType", chatType)
-  end
-
-  -- renew lead
-  if ChatEdit_UpdateHeader then
-    ChatEdit_UpdateHeader(eb)
-  end
-
-  -- return data
-  eb:SetText(text)
-  eb:SetCursorPosition(math.min(cursor, #text))
-end
-
 
 local function MakeBlock(parent, w, h)
   local b = CreateFrame("Button", nil, parent)
@@ -1030,7 +937,7 @@ Build = function()
         UI.selectedChatType = upper
         UI.selectedTarget = nil
         StopFlash(b)
-        SwitchChatPreserveText(upper)
+        ActivateChat(upper)
       end)
 
       table.insert(UI.buttons, b)
@@ -1062,7 +969,7 @@ Build = function()
         b:SetScript("OnClick", function()
           UI.selectedChatType = "CHANNEL"
           UI.selectedTarget = id
-          SwitchChatPreserveText("CHANNEL", id)
+          ActivateChat("CHANNEL", id)
         end)
 
         table.insert(UI.buttons, b)
@@ -1108,54 +1015,6 @@ Build = function()
 
     table.insert(UI.buttons, b)
   end
-
-  if db.readycheck and db.readycheck.enabled then
-  local b = MakeBlock(UI.bar, db.w, db.h)
-
-  -- стиль (светло-жёлтый / нейтральный)
-  b.tex:SetVertexColor(1, 0.9, 0.35, 0.22)
-  b._baseColor = { 1, 0.9, 0.35, 0.22 }
-
-  local function RCTooltip()
-    if not IsInGroup() then
-      return "READY CHECK (need party/raid)"
-    end
-    if not CanReadyCheck() then
-      return "READY CHECK (leader/assist only)"
-    end
-    return "READY CHECK"
-  end
-
-  b._tooltipText = RCTooltip()
-
-  b:SetScript("OnEnter", function(self)
-    self._tooltipText = RCTooltip()
-    Tooltip(self, self._tooltipText, 1, 0.9, 0.35)
-    if self._animateBorder then self._animateBorder(1, 0.9, 0.35, 0.75) end
-    local r, g, bl, a = self.tex:GetVertexColor()
-    self.tex:SetVertexColor(r, g, bl, math.min(a + 0.15, 1))
-  end)
-
-  b:SetScript("OnLeave", function(self)
-    GameTooltip:Hide()
-    if self._baseColor then
-      self.tex:SetVertexColor(self._baseColor[1], self._baseColor[2], self._baseColor[3], self._baseColor[4])
-    end
-    if self._animateBorder then self._animateBorder(0, 0, 0, 0.55) end
-  end)
-
-  b:SetScript("OnClick", function()
-    if not CanReadyCheck() then
-      
-      Print("Ready Check: you must be party leader / raid leader/assist.")
-      return
-    end
-    DoReadyCheckNow()
-  end)
-
-  table.insert(UI.buttons, b)
-end
-
 
   Layout()
 end
@@ -1251,11 +1110,6 @@ f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("CHANNEL_UI_UPDATE")
 f:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
 
-f:RegisterEvent("GROUP_ROSTER_UPDATE")
-f:RegisterEvent("PARTY_LEADER_CHANGED")
-f:RegisterEvent("RAID_ROSTER_UPDATE")
-
-
 f:RegisterEvent("CHAT_MSG_PARTY")
 f:RegisterEvent("CHAT_MSG_PARTY_LEADER")
 f:RegisterEvent("CHAT_MSG_RAID")
@@ -1295,12 +1149,8 @@ f:SetScript("OnEvent", function(self, event, arg1)
   end
 
   if event == "PLAYER_ENTERING_WORLD"
-  or event == "CHANNEL_UI_UPDATE"
-  or event == "CHAT_MSG_CHANNEL_NOTICE"
-  or event == "GROUP_ROSTER_UPDATE"
-  or event == "PARTY_LEADER_CHANGED"
-  or event == "RAID_ROSTER_UPDATE" then
-
-  Build()
-end
+    or event == "CHANNEL_UI_UPDATE"
+    or event == "CHAT_MSG_CHANNEL_NOTICE" then
+    Build()
+  end
 end)
